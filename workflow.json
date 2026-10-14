@@ -1,0 +1,372 @@
+{
+  "name": "Network Monitor - Auto-remédiation SSH & alertes Telegram",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Garde-fou restart\n**Conditions OBLIGATOIRES :**\n\n1. `status` = DOWN ou DEGRADED\n2. `httpOK === false` (service vraiment KO)\n3. Type non dans la liste exclue\n\n→ Routeur / Switch / AP / DNS\n**jamais** redémarrés automatiquement",
+        "height": 200,
+        "width": 300,
+        "color": 3
+      },
+      "id": "84d56013-42cc-45c9-bb7e-a34b9a7f7f90",
+      "name": "Note - Garde-fou",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1040, 432]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ══════════════════════════════════════════════════\n// ÉTAPE 3 : Garde-fou avant restart\n// Règles heuristiques déterministes — PAS de l'IA\n//\n// Conditions STRICTES pour déclencher un restart :\n//   1. status === 'DOWN' ou 'DEGRADED'\n//   2. httpOK === false (service KO confirmé HTTP)\n//   3. Type non dans la liste des exclus\n// ══════════════════════════════════════════════════\n\nconst data       = $input.first().json;\nconst sshTargets = data.sshTargets || [];\n\n// Types d'équipements jamais redémarrés automatiquement\n// (pas d'accès SSH ou redémarrage trop risqué)\nconst TYPES_EXCLUS = [\n  'Routeur', 'Routeur WiFi', 'Mikrotik',\n  'Access Point', 'Switch',\n  'DNS Google', 'DNS Cloudflare',\n  'Imprimante', 'Telephone', 'Inconnu'\n];\n\n// ── Séparer les cibles en catégories ──────────────\nconst exclusParType  = sshTargets.filter(d => TYPES_EXCLUS.includes(d.type));\nconst httpEncoreOK   = sshTargets.filter(d => !TYPES_EXCLUS.includes(d.type) && d.httpOK !== false);\nconst eligibles      = sshTargets.filter(d =>\n  (d.status === 'DOWN' || d.status === 'DEGRADED') &&\n  d.httpOK === false &&\n  !TYPES_EXCLUS.includes(d.type)\n);\n\n// ── Construire la commande SSH ─────────────────────\nconst sshCommand = eligibles.length === 0\n  ? null\n  : eligibles\n      .map(d => `echo '=== [${d.name}] ===' && ${d.sshCmd} 2>&1`)\n      .join(' && echo \"---\" && ');\n\n// ── Message d'explication précis ──────────────────\nlet sshSkippedReason = null;\nif (eligibles.length === 0) {\n  const raisons = [];\n\n  if (exclusParType.length > 0) {\n    const noms = exclusParType.map(d => `${d.name} (${d.type})`).join(', ');\n    raisons.push(`${noms} → équipement non redémarrable à distance`);\n  }\n\n  if (httpEncoreOK.length > 0) {\n    const noms = httpEncoreOK.map(d => d.name).join(', ');\n    raisons.push(`${noms} → service HTTP encore accessible, pas de restart nécessaire`);\n  }\n\n  sshSkippedReason = raisons.length > 0\n    ? raisons.join(' | ')\n    : 'Aucun service éligible au redémarrage automatique';\n}\n\nreturn [{\n  json: {\n    ...data,\n    sshCommand,\n    sshEligibles:     eligibles.length,\n    eligibleDevices:  eligibles.map(d => d.name),\n    exclusParType:    exclusParType.map(d => `${d.name} (${d.type})`),\n    sshSkippedReason\n  }\n}];"
+      },
+      "id": "01235cce-dcb2-4849-a699-8317f3b5fd62",
+      "name": "Code - Garde-fou & commande SSH ciblée",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1088, 640]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-ssh",
+              "leftValue": "={{ $json.sshEligibles }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d6194db0-b931-452b-aede-840a2c4f853b",
+      "name": "IF - SSH éligible ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1312, 640]
+    },
+    {
+      "parameters": {},
+      "id": "c749bc39-7693-4b52-8c4b-d44edf56782f",
+      "name": "Pas de SSH - Type exclu ou httpOK",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1536, 752]
+    },
+    {
+      "parameters": {
+        "content": "## Network Monitor\n**Auteur :** Nombré Alidou Salim - Projet de fin de formation (DTS Systèmes et Réseaux)\n\n**Flux complet :**\nWebhook → Analyse+ServiceMap → IF DOWN\n→ Wait 30s → Confirmation ≥2 cycles\n→ Garde-fou SSH → SSH ciblé → Log → Telegram\n\n**Points clés :**\n✅ Restart ciblé par service\n✅ Compteur consécutif (anti faux positif)\n✅ Seuil avant action (≥2 cycles)\n✅ Garde-fou : restart SEULEMENT si httpOK=false\n✅ Types non redémarrables exclus (Routeur/Switch)\n✅ Log dans la console n8n\n✅ Terminologie correcte (règles heuristiques, pas IA)",
+        "height": 372,
+        "width": 380,
+        "color": 4
+      },
+      "id": "1c620d00-2aed-437a-87e9-6b414c7f99dc",
+      "name": "Note - Architecture",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-384, 480]
+    },
+    {
+      "parameters": {
+        "content": "## Confirmation réelle\nUtilise `$getWorkflowStaticData`\npour tracker les cycles consécutifs.\n\n**Règle :** action SSH uniquement\nsi DOWN pendant **≥2 cycles** consécutifs.\n\n**Reset :** compteur → 0 dès que UP.\n\n⚠️ Persiste seulement quand le workflow est **activé** (pas en test manuel).",
+        "height": 230,
+        "width": 280,
+        "color": 6
+      },
+      "id": "01ae03e3-45da-4f90-8ed3-46db3c87255c",
+      "name": "Note - Compteur",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [272, 544]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "net-monitor",
+        "options": {}
+      },
+      "id": "ab2a571c-8e32-4766-9f6b-34464628f19d",
+      "name": "Webhook - Réception PowerShell",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [-448, 848]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ══════════════════════════════════════════════════\n// ÉTAPE 1 : Analyse + Service Map\n// ══════════════════════════════════════════════════\n\nconst serviceMap = {\n\n  // ── ROUTEURS ──────────────────────────────────────\n  '192.168.1.1': { type: 'Routeur WiFi', critical: true, sshCmd: null },\n\n  // ── SWITCHES ──────────────────────────────────────\n  '192.168.1.2': { type: 'Switch',       critical: true, sshCmd: null },\n\n  // ── DNS PUBLICS ───────────────────────────────────\n  '8.8.8.8':       { type: 'DNS Google',     critical: true, sshCmd: null },\n  '1.1.1.1':       { type: 'DNS Cloudflare', critical: true, sshCmd: null },\n\n  // ── SERVEUR LINUX ─────────────────────────────────\n  // Ordre : diagnostic système → restart services\n  '192.168.1.50': {\n    type: 'Serveur Linux',\n    critical: false,\n    sshCmd: [\n\n      // 1. Diagnostic disque et RAM avant toute action\n      \"DISK=$(df -h / | awk 'NR==2{print $5}')\",\n      \"RAM=$(free -m | awk 'NR==2{printf \\\"%s/%s Mo\\\", $3,$2}')\",\n      \"echo \\\"DIAG_DISK:$DISK DIAG_RAM:$RAM\\\"\",\n\n      // Alerte si disque > 85%\n      \"DISK_PCT=$(df / | awk 'NR==2{gsub(/%/,\\\"\\\",$5); print $5}')\",\n      \"if [ \\\"$DISK_PCT\\\" -gt 85 ]; then echo \\\"WARN_DISK: Disque plein a ${DISK_PCT}% — cause probable du crash\\\"; fi\",\n\n      \"echo '--- Remediation services ---'\",\n\n      // Apache2\n      \"APACHE_STATUS='absent'\",\n      \"if systemctl list-unit-files 2>/dev/null | grep -q '^apache2.service'; then\",\n      \"  if ! systemctl is-active --quiet apache2; then\",\n      \"    sudo systemctl restart apache2 2>&1\",\n      \"    if systemctl is-active --quiet apache2; then\",\n      \"      APACHE_STATUS='redemarre_OK';\",\n      \"      echo 'OK: apache2 redemarre avec succes';\",\n      \"    else\",\n      \"      APACHE_STATUS='echec';\",\n      \"      echo 'ERREUR: apache2 restart echoue';\",\n      \"    fi\",\n      \"  else\",\n      \"    APACHE_STATUS='deja_actif';\",\n      \"    echo 'INFO: apache2 deja actif';\",\n      \"  fi\",\n      \"fi\",\n\n      // Nginx\n      \"NGINX_STATUS='absent'\",\n      \"if systemctl list-unit-files 2>/dev/null | grep -q '^nginx.service'; then\",\n      \"  if ! systemctl is-active --quiet nginx; then\",\n      \"    sudo systemctl restart nginx 2>&1\",\n      \"    if systemctl is-active --quiet nginx; then\",\n      \"      NGINX_STATUS='redemarre_OK';\",\n      \"      echo 'OK: nginx redemarre avec succes';\",\n      \"    else\",\n      \"      NGINX_STATUS='echec';\",\n      \"      echo 'ERREUR: nginx restart echoue';\",\n      \"    fi\",\n      \"  else\",\n      \"    NGINX_STATUS='deja_actif';\",\n      \"    echo 'INFO: nginx deja actif';\",\n      \"  fi\",\n      \"fi\",\n\n      // MySQL\n      \"MYSQL_STATUS='absent'\",\n      \"if systemctl list-unit-files 2>/dev/null | grep -q '^mysql.service'; then\",\n      \"  if ! systemctl is-active --quiet mysql; then\",\n      \"    sudo systemctl restart mysql 2>&1\",\n      \"    if systemctl is-active --quiet mysql; then\",\n      \"      MYSQL_STATUS='redemarre_OK';\",\n      \"      echo 'OK: mysql redemarre avec succes';\",\n      \"    else\",\n      \"      MYSQL_STATUS='echec';\",\n      \"      echo 'ERREUR: mysql restart echoue';\",\n      \"    fi\",\n      \"  else\",\n      \"    MYSQL_STATUS='deja_actif';\",\n      \"    echo 'INFO: mysql deja actif';\",\n      \"  fi\",\n      \"fi\",\n\n      // Bilan final parseable par n8n\n      \"echo \\\"BILAN_APACHE:$APACHE_STATUS|BILAN_NGINX:$NGINX_STATUS|BILAN_MYSQL:$MYSQL_STATUS\\\"\"\n\n    ].join(\"\\n\")\n  }\n};\n\n// ── Traitement données PowerShell ─────────────────\nconst data    = $input.first().json.body ?? $input.first().json;\nconst devices = Array.isArray(data.devices) ? data.devices : [];\n\nconst enriched = devices.map(d => ({\n  ...d,\n  ...(serviceMap[d.ip] || { type: 'Inconnu', critical: false, sshCmd: null })\n}));\n\nconst down     = enriched.filter(d => d.status === 'DOWN');\nconst up       = enriched.filter(d => d.status === 'UP');\nconst degraded = enriched.filter(d => d.status === 'DEGRADED');\nconst masked   = enriched.filter(d => d.status === 'MASKED');\nconst critical = down.filter(d => d.critical);\n\n// Traduction statut en français\nconst tradStatut = { UP: 'En ligne', DOWN: 'Hors service', DEGRADED: 'Dégradé', MASKED: 'Masqué' };\nconst tradSev    = { OK: '✅ Normal', WARNING: '⚠️ Alerte', DEGRADED: '🟡 Dégradé', CRITICAL: '🔴 Critique', UNKNOWN: '❓ Inconnu' };\n\nreturn [{\n  json: {\n    timestamp:     data.timestamp     || new Date().toISOString(),\n    severity:      data.severity      || 'UNKNOWN',\n    severityFR:    tradSev[data.severity] || data.severity,\n    totalDevices:  enriched.length,\n    upCount:       up.length,\n    downCount:     down.length,\n    degradedCount: degraded.length,\n    maskedCount:   masked.length,\n    criticalCount: critical.length,\n    highRiskCount: data.highRiskCount || 0,\n    downDevices:   down,\n    allDevices:    enriched,\n    tradStatut\n  }\n}];"
+      },
+      "id": "0d843b8b-750e-4468-a2ca-9dd7426a8b7f",
+      "name": "Code - Analyse & Service Map",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-224, 848]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-01",
+              "leftValue": "={{ $json.downCount }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            },
+            {
+              "id": "492636af-791e-4759-abfc-19e88e02249b",
+              "leftValue": "={{ $json.degradedCount }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "4870532c-d603-42a1-946f-723152416800",
+      "name": "IF - Des équipements DOWN ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [208, 848]
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "id": "f914b567-6517-4e68-80a2-89de6d57e8a4",
+      "name": "Wait 30s - Délai anti faux positif",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [432, 736]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst data       = $input.first().json;\n\nif (!staticData.failureCounts)  staticData.failureCounts  = {};\nif (!staticData.totalIncidents) staticData.totalIncidents = 0;\n\nconst allDevices      = data.allDevices || [];\nconst downDevices     = allDevices.filter(d => d.status === 'DOWN');\nconst degradedDevices = allDevices.filter(d => d.status === 'DEGRADED' && d.httpOK === false);\nconst problemDevices  = [...downDevices, ...degradedDevices];\n\nfor (const d of problemDevices) {\n  staticData.failureCounts[d.ip] = (staticData.failureCounts[d.ip] || 0) + 1;\n}\nfor (const d of allDevices) {\n  if (d.status === 'UP') staticData.failureCounts[d.ip] = 0;\n}\n\nconst confirmedDown = problemDevices\n  .map(d => ({ ...d, consecutiveFailures: staticData.failureCounts[d.ip] || 1 }))\n  .filter(d => d.consecutiveFailures >= 2);\n\nconst sshTargets = confirmedDown.filter(d => d.sshCmd !== null && d.sshCmd !== undefined);\n\nif (confirmedDown.length > 0) staticData.totalIncidents += 1;\n\nreturn [{\n  json: {\n    ...data,\n    confirmedDown,\n    confirmedDownCount: confirmedDown.length,\n    sshTargets,\n    sshRequired:    sshTargets.length > 0,\n    confirmed:      confirmedDown.length > 0,\n    totalIncidents: staticData.totalIncidents,\n    failureCounts:  { ...staticData.failureCounts }\n  }\n}];"
+      },
+      "id": "8deb1d4b-4fde-4a71-a159-d3768bf71a1f",
+      "name": "Code - Confirmation + Compteur ≥2 cycles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 736]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-02",
+              "leftValue": "={{ $json.confirmedDownCount }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0ea8c2c8-07a3-4d08-b01e-4d9a1a0f9b85",
+      "name": "IF - Panne confirmée ≥2 cycles ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [864, 736]
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.sshCommand }}"
+      },
+      "id": "fc341640-1149-4e13-8a4c-84dc672a7bf4",
+      "name": "SSH - Auto-remédiation ciblée",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [1536, 544]
+    },
+    {
+      "parameters": {
+        "jsCode": "const sshOutput = $input.first().json;\nconst data      = $('Code - Garde-fou & commande SSH ciblée').first().json;\nconst confirmed = data.confirmedDown || [];\n\nconst deviceList = confirmed.length > 0\n  ? confirmed.map(d => `${d.name}(${d.ip})[${d.type||'N/A'}]x${d.consecutiveFailures||1}`).join(' | ')\n  : 'Aucun device confirme';\n\nconst sshInfo = data.sshEligibles > 0\n  ? `SSH_OK:${(data.eligibleDevices||[]).join(',')} — ${sshOutput.stdout||''}`\n  : `SSH_SKIP:${data.sshSkippedReason||'N/A'}`;\n\nconst logLine = [\n  data.timestamp                || new Date().toISOString(),\n  `SEV:${data.severity          || 'N/A'}`,\n  `INCIDENT#${data.totalIncidents    || 0}`,\n  `DOWN_CONFIRMES:${data.confirmedDownCount || 0}`,\n  deviceList,\n  sshInfo\n].join(' || ');\n\nreturn [{ json: { ...data, sshResult: sshOutput.stdout, logLine } }];"
+      },
+      "id": "4e7fed5f-129f-4a4f-a0fb-db17dbf50b5f",
+      "name": "Code - Préparer entrée log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 640]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=🚨 *INCIDENT RÉSEAU CONFIRMÉ*\n\n📅 `{{ $json.timestamp }}`\n🔴 Sévérité : *{{ $json.severityFR }}*\n\n📊 *Bilan :*\n  • Total testés : `{{ $json.totalDevices }}`\n  • ✅ En ligne : `{{ $json.upCount }}`\n  • 🟡 Dégradés : `{{ $json.degradedCount }}`\n  • ❌ Hors service : `{{ $json.downCount }}`\n\n🔴 *Pannes confirmées (≥2 cycles) :*\n{{ $json.confirmedDown.map(d => `  • ${d.name} (${d.ip})\\n    Type : ${d.type}\\n    Statut : ${d.status === 'DEGRADED' ? '🟡 Dégradé (service KO, machine UP)' : '❌ Hors service total'}\\n    Cycles consécutifs : ${d.consecutiveFailures}x${d.critical ? '\\n    ⚠️ ÉQUIPEMENT CRITIQUE' : ''}`).join('\\n') }}\n\n🔧 *Remédiation SSH :*\n{{ $json.sshEligibles > 0 ? '  ✅ Restart déclenché sur : ' + $json.eligibleDevices.join(', ') + '\\n\\n💻 *Résultat SSH :*\\n```\\n' + ($json.sshResult || 'Voir logs n8n') + '\\n```' : '  ⏭ Pas de SSH — ' + ($json.sshSkippedReason || 'type non redémarrable') }}\n\n📈 *Total incidents (session) :* {{ $json.totalIncidents }}\n⏱ _Prochain contrôle automatique dans 5 min_",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "61758f3b-cd9d-4699-aa77-d89ac0ad8515",
+      "name": "Telegram - Alerte panne confirmée",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2208, 640]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=⚠️ *ANOMALIE DÉTECTÉE (cycle 1)*\n\n📅 `{{ $json.timestamp }}`\n❌ Hors service : `{{ $json.downCount }}`\n🟡 Dégradés : `{{ $json.degradedCount }}`\n\n⏳ Confirmation attendue au prochain contrôle (≥2 cycles consécutifs).\n_Aucune action de remédiation n'est déclenchée pour l'instant._",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "79017272-8599-4827-9810-65ce4c4de9ad",
+      "name": "Telegram - Anomalie détectée (cycle 1)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1088, 896]
+    },
+    {
+      "parameters": {},
+      "id": "641781e5-1583-4221-90c7-69d21dea0243",
+      "name": "Réseau 100% OK — Aucune action",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [432, 992]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data    = $input.first().json;\nconst logLine = data.logLine || 'no-log';\nconsole.log('NET-MONITOR LOG:', logLine);\nreturn $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1936, 624],
+      "id": "c02bc5ba-c529-44ed-9517-922a63151cba",
+      "name": "Code - Écrire log fichier"
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\n\n// on sauvegarde TOUT le résultat enrichi\nstaticData.lastStatus = $input.first().json;\n\nreturn $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-16, 848],
+      "id": "cad8c3ed-32f3-47a3-aa2e-678854f964c6",
+      "name": "Save Last State"
+    },
+    {
+      "parameters": {
+        "path": "net-monitor-status",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [304, 1200],
+      "id": "eed497c9-4ca3-4365-82b2-b75dc4c592f6",
+      "name": "Webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\n\nreturn [{\n  json: staticData.lastStatus || {\n    message: \"Pas encore de données\"\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [656, 1216],
+      "id": "7068b620-8382-496f-bcd2-2bef7be1d8cf",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [976, 1216],
+      "id": "94b32504-4416-42ef-a7bd-3ab9de6633fa",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "connections": {
+    "Code - Garde-fou & commande SSH ciblée": {
+      "main": [[{ "node": "IF - SSH éligible ?", "type": "main", "index": 0 }]]
+    },
+    "IF - SSH éligible ?": {
+      "main": [
+        [{ "node": "SSH - Auto-remédiation ciblée", "type": "main", "index": 0 }],
+        [{ "node": "Pas de SSH - Type exclu ou httpOK", "type": "main", "index": 0 }]
+      ]
+    },
+    "Pas de SSH - Type exclu ou httpOK": {
+      "main": [[{ "node": "Code - Préparer entrée log", "type": "main", "index": 0 }]]
+    },
+    "Webhook - Réception PowerShell": {
+      "main": [[{ "node": "Code - Analyse & Service Map", "type": "main", "index": 0 }]]
+    },
+    "Code - Analyse & Service Map": {
+      "main": [[{ "node": "Save Last State", "type": "main", "index": 0 }]]
+    },
+    "IF - Des équipements DOWN ?": {
+      "main": [
+        [{ "node": "Wait 30s - Délai anti faux positif", "type": "main", "index": 0 }],
+        [{ "node": "Réseau 100% OK — Aucune action", "type": "main", "index": 0 }]
+      ]
+    },
+    "Wait 30s - Délai anti faux positif": {
+      "main": [[{ "node": "Code - Confirmation + Compteur ≥2 cycles", "type": "main", "index": 0 }]]
+    },
+    "Code - Confirmation + Compteur ≥2 cycles": {
+      "main": [[{ "node": "IF - Panne confirmée ≥2 cycles ?", "type": "main", "index": 0 }]]
+    },
+    "IF - Panne confirmée ≥2 cycles ?": {
+      "main": [
+        [{ "node": "Code - Garde-fou & commande SSH ciblée", "type": "main", "index": 0 }],
+        [{ "node": "Telegram - Anomalie détectée (cycle 1)", "type": "main", "index": 0 }]
+      ]
+    },
+    "SSH - Auto-remédiation ciblée": {
+      "main": [[{ "node": "Code - Préparer entrée log", "type": "main", "index": 0 }]]
+    },
+    "Code - Préparer entrée log": {
+      "main": [[{ "node": "Code - Écrire log fichier", "type": "main", "index": 0 }]]
+    },
+    "Code - Écrire log fichier": {
+      "main": [[{ "node": "Telegram - Alerte panne confirmée", "type": "main", "index": 0 }]]
+    },
+    "Save Last State": {
+      "main": [[{ "node": "IF - Des équipements DOWN ?", "type": "main", "index": 0 }]]
+    },
+    "Webhook": {
+      "main": [[{ "node": "Code in JavaScript", "type": "main", "index": 0 }]]
+    },
+    "Code in JavaScript": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "meta": {}
+}
