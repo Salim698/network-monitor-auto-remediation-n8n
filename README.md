@@ -10,13 +10,14 @@ Projet de fin de formation : Technicien Spécialisé en Systèmes et Réseaux.
 
 ## Fonctionnalités
 
-- Réception de l'état du réseau via webhook (script PowerShell planifié)
+- Script PowerShell de scan (ping, port TCP, HTTP) planifiable toutes les 5 minutes
+- Réception de l'état du réseau via webhook
 - Enrichissement par une **Service Map** : type d'équipement, criticité, commande de remédiation
 - **Anti faux positif** : une panne n'est confirmée qu'après 2 cycles consécutifs
 - **Garde-fou déterministe** (règles heuristiques, pas d'IA) : restart uniquement si le service HTTP est réellement KO
 - **Équipements exclus** : routeurs, switchs, points d'accès, DNS ne sont jamais redémarrés automatiquement
 - **Remédiation ciblée** par SSH : diagnostic disque/RAM, puis restart d'Apache2, Nginx, MySQL seulement s'ils sont arrêtés
-- Alertes Telegram (anomalie, panne confirmée avec résultat SSH)
+- Alertes Telegram (anomalie, panne confirmée avec résultat SSH, y compris en cas d'échec SSH)
 - Endpoint de statut JSON pour alimenter un tableau de bord
 
 ## Architecture
@@ -50,7 +51,7 @@ flowchart TD
 | Brique | Rôle |
 |---|---|
 | n8n | Orchestration |
-| PowerShell | Collecte de l'état du réseau (ping + test HTTP) |
+| PowerShell | Collecte de l'état du réseau (ping, port, HTTP) |
 | SSH | Remédiation sur le serveur Linux |
 | Telegram | Notifications |
 | VMware | Serveur web de test (Linux, Apache, Nginx) |
@@ -62,11 +63,13 @@ flowchart TD
 3. Importer `workflow.json` dans n8n et connecter les credentials SSH et Telegram
 4. Adapter la `serviceMap` (IPs, noms) dans le nœud `Code - Analyse & Service Map`
 5. **Activer** le workflow (le compteur de pannes ne fonctionne qu'en mode actif)
-6. Envoyer des payloads de test : voir [docs/payload-format.md](docs/payload-format.md)
+6. Configurer et planifier le scanner : voir [docs/powershell-scanner.md](docs/powershell-scanner.md)
+7. Tester avec les payloads de [docs/payload-format.md](docs/payload-format.md)
 
 ## Documentation
 
 - [Installation et configuration](docs/installation.md)
+- [Scanner PowerShell](docs/powershell-scanner.md)
 - [Format des données et tests](docs/payload-format.md)
 - [Logique du garde-fou](docs/safeguards.md)
 - [Description de chaque nœud](docs/nodes.md)
@@ -80,10 +83,13 @@ flowchart TD
 ├── README.md
 ├── .gitignore
 ├── LICENSE
+├── scripts/
+│   └── net-scan.ps1
 ├── examples/
 │   └── sample-payload.json
 ├── docs/
 │   ├── installation.md
+│   ├── powershell-scanner.md
 │   ├── payload-format.md
 │   ├── safeguards.md
 │   ├── nodes.md
@@ -96,8 +102,9 @@ flowchart TD
 
 - Aucun mot de passe, token ni URL privée dans le repo
 - Les accès SSH et Telegram passent par les credentials n8n
+- Le scanner lit l'URL du webhook et le token dans des variables d'environnement
 - La remédiation repose sur un utilisateur SSH dédié avec `sudo` limité à 3 commandes (voir installation)
-- Les webhooks ne sont pas authentifiés par défaut : à protéger avant toute exposition (voir [limites](docs/limitations-and-roadmap.md))
+- Protège le webhook avec Header Auth avant toute exposition (voir [scanner PowerShell](docs/powershell-scanner.md))
 
 ## Auteur
 
