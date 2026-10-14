@@ -1,0 +1,7 @@
+.env
+*.env
+credentials*.json
+*.pem
+id_rsa*
+.DS_Store
+node_modules/
