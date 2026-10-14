@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-10-14T10:00:00Z",
+  "severity": "DEGRADED",
+  "highRiskCount": 0,
+  "devices": [
+    { "ip": "192.168.1.1",  "name": "Routeur WiFi",  "status": "UP",       "httpOK": true  },
+    { "ip": "192.168.1.2",  "name": "Switch",        "status": "UP",       "httpOK": true  },
+    { "ip": "8.8.8.8",      "name": "DNS Google",    "status": "UP",       "httpOK": true  },
+    { "ip": "192.168.1.50", "name": "Serveur Web",   "status": "DEGRADED", "httpOK": false }
+  ]
+}
