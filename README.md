@@ -8,6 +8,15 @@ Projet de fin de formation : Technicien Spécialisé en Systèmes et Réseaux.
 
 ![Vue d'ensemble du workflow n8n](images/workflow.png)
 
+## Alertes Telegram
+
+<p align="center">
+  <img src="images/image_2026-10-15_01-02-30.png" alt="Alerte Telegram - capture 1" width="45%">
+  <img src="images/image_2026-10-15_01-03-22.png" alt="Alerte Telegram - capture 2" width="45%">
+</p>
+
+Exemples de notifications envoyées par le workflow : bilan du scan, équipements en panne, remédiation SSH déclenchée ou non, résultat de la commande.
+
 ## Fonctionnalités
 
 - Script PowerShell de scan (ping, port TCP, HTTP) planifiable toutes les 5 minutes
@@ -95,7 +104,9 @@ flowchart TD
 │   ├── nodes.md
 │   └── limitations-and-roadmap.md
 └── images/
-    └── workflow.png
+    ├── workflow.png
+    ├── image_2026-10-15_01-02-30.png
+    └── image_2026-10-15_01-03-22.png
 ```
 
 ## Sécurité
